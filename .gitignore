@@ -1,3 +1,4 @@
 *.pyc
 *.so
 memo_vulns.json
+core

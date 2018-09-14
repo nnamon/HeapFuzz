@@ -19,7 +19,7 @@ class Vulnerability():
         '2': 'HEAP READ OOB',
         '3': 'FREE NON ALLOC',
         '4': 'DOUBLE FREE',
-        '5': 'USE_AFTER_FREE',
+        '5': 'USE AFTER FREE',
         '6': 'SEGMENTATION FAULT'
     }
 
@@ -69,7 +69,7 @@ class Input():
         self.min = min
 
     def _send(self, data, newline, callback):
-        callback(data, newline)
+        callback(data, newline, self.send_after)
         try:
             if newline:
                 self.process.sendline(data)
@@ -195,7 +195,7 @@ class HeapFuzz():
 
     def _format_triggers(self):
         triggers = "Triggered with:"
-        for sent_data, newline in self.trigger:
+        for sent_data, newline, _ in self.trigger:
             msg = "Sending '{}' {} newline".format(sent_data, "with" if newline else "without")
             triggers += "\t"+ "\n\t" + msg
         return triggers
@@ -208,8 +208,8 @@ class HeapFuzz():
                 log.warn(vuln)
                 log.warn(self._format_triggers())
 
-    def _send_callback(self, data, newline):
-        self.trigger.append((data, newline))
+    def _send_callback(self, data, newline, sendafter=None):
+        self.trigger.append((data, newline, sendafter))
 
     def _dump_vulns(self):
         with open(self.dumpfile, 'w') as fd:
