@@ -8,6 +8,9 @@ import random
 import struct
 import re
 import os
+import json
+
+DISABLE_ASLR = "Please disable ASLR with 'echo 0 | sudo tee /proc/sys/kernel/randomize_va_space'!"
 
 
 class Vulnerability():
@@ -22,14 +25,14 @@ class Vulnerability():
 
     def __init__(self, data):
         data = data.split("-")
-        print data
         self.kind = data[0]
         self.addr = data[1]
         self.orgsize = data[2]
         self.newsize = data[3]
 
     def __str__(self):
-        return "Found {} on {} size: {} new size: {}".format(self.vulns[self.kind], self.addr, self.orgsize,
+        return "Found {} on {} size: {} new size: {}".format(self.vulns[self.kind],
+                                                             self.addr, self.orgsize,
                                                              self.newsize)
 
 
@@ -52,8 +55,8 @@ class Input():
     format_re = re.compile('(%[a-z])')
     string_charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 
-    def __init__(self, kind=None, choice=None, min=1, max=10, send_after=">", format=None, newline=True, end="\n",
-                 after=None, map_choice=None):
+    def __init__(self, kind=None, choice=None, min=1, max=10, send_after=">", format=None,
+                 newline=True, end="\n", after=None, map_choice=None):
         self.type = kind
         self.choice = choice
         self.send_after = send_after
@@ -145,21 +148,22 @@ class Input():
             return self.after
 
 class HeapFuzz():
-    def __init__(self, bin, pipe="/tmp/heapfuzz", preload_lib="./heapfuzz.so"):
+    def __init__(self, binary, pipe="/tmp/heapfuzz", preload_lib="./heapfuzz.so", dumpfile=None):
         self.preload_lib = preload_lib
         self._configure()
-        self.process = process(bin)
+        self.process = process(binary)
         self.pipe_name = pipe
-        self.bin = bin
+        self.binary = binary
         self._open_pipe()
         self.vulnerabilities = {}
         self.trigger = []
+        self.dumpfile = dumpfile
 
     def _configure(self):
         with open('/proc/sys/kernel/randomize_va_space', 'r') as aslr:
             enabled = int(aslr.read())
             if enabled:
-                log.warn("Please disable ASLR with 'echo 0 | sudo tee /proc/sys/kernel/randomize_va_space'!")
+                log.warn(DISABLE_ASLR)
                 sys.exit(0)
             aslr.close()
         context.log_level = "warn"
@@ -167,13 +171,15 @@ class HeapFuzz():
         os.environ["USE_HEAPFUZZ"] = "1"
 
     def _open_pipe(self):
+        if not os.path.exists(self.pipe_name):
+            os.mkfifo(self.pipe_name)
         self.pipe_fd = os.open(self.pipe_name, os.O_RDONLY | os.O_NONBLOCK)
 
     def _restart(self):
         try:
             self.process.close()
         except: pass
-        self.process = process(self.bin)
+        self.process = process(self.binary)
         os.close(self.pipe_fd)
         self._open_pipe()
         self.trigger = []
@@ -187,18 +193,28 @@ class HeapFuzz():
         except:
             pass
 
+    def _format_triggers(self):
+        triggers = "Triggered with:"
+        for sent_data, newline in self.trigger:
+            msg = "Sending '{}' {} newline".format(sent_data, "with" if newline else "without")
+            triggers += "\t"+ "\n\t" + msg
+        return triggers
+
     def _parse_vulnerability(self, data):
-        if data:
-            l = str(Vulnerability(data))
-            try:
-                self.vulnerabilities[hash(l)]
-            except KeyError:
-                self.vulnerabilities.update({hash(l): self.trigger})
-                log.warn(Vulnerability(data))
-                log.warn("Triggered with:\n"+"\t"+"\n\t".join(self.trigger)+"\n")
+        if data and len(data.split("-")) == 4:
+            vuln = Vulnerability(data)
+            if data not in self.vulnerabilities:
+                self.vulnerabilities[data] = self.trigger
+                log.warn(vuln)
+                log.warn(self._format_triggers())
 
     def _send_callback(self, data, newline):
-        self.trigger.append("Sending '{}' {}".format(data, "with newline" if newline else "without newline"))
+        self.trigger.append((data, newline))
+
+    def _dump_vulns(self):
+        with open(self.dumpfile, 'w') as fd:
+            json.dump(self.vulnerabilities, fd)
+        log.warn("Vulnerabilities written out to %s" % self.dumpfile)
 
     def start(self, init):
         ret = init.run(self.process, self._send_callback)
@@ -213,6 +229,9 @@ class HeapFuzz():
                     self._parse_vulnerability(self._read_from_pipe())
                     ret = ret.run(self.process, self._send_callback)
             except KeyboardInterrupt:
+                if self.dumpfile is not None:
+                    self._dump_vulns()
                 self.process.close()
                 exit(0)
+
 
