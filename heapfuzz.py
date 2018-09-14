@@ -22,6 +22,7 @@ class Vulnerability():
 
     def __init__(self, data):
         data = data.split("-")
+        print data
         self.kind = data[0]
         self.addr = data[1]
         self.orgsize = data[2]
